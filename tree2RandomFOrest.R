@@ -1,5 +1,7 @@
 set.seed(1L)
 library("R6")
+
+# Queue
 MQueue = R6Class("MQueue",
   public = list(
     queue = NULL,
@@ -42,6 +44,7 @@ MQueue = R6Class("MQueue",
     )
   )
 
+# Tree
 Mtree = R6Class("Mtree",
   public = list(
   queue = NULL,
@@ -74,14 +77,16 @@ Mtree = R6Class("Mtree",
     res.list = lapply(all.cut, function(c) {
       r = ind[(X[ind, colname] > c)]
       l = ind[(X[ind, colname] <= c)]
-      gini = self$gini(r) + self$gini(l)
+      lp = length(l) / (length(l) + length(r))
+      rp = length(r) / (length(l) + length(r))
+      gini = rp * self$gini(r) + lp * self$gini(l)
       if (length(r) < self$minLeafsize || length(l) < self$minLeafsize) {
         return(NA)
       }
       list(l = l, r = r, gini = gini)
     })
     gini.list = lapply(res.list, function(x) {
-      if (is.na(x)) return(NA)
+      if (any(is.na(x))) return(NA)
       x$gini
     })
     if (all(is.na(gini.list))) return(NA)
@@ -95,10 +100,10 @@ Mtree = R6Class("Mtree",
     xns = names(self$X)
     s.list = lapply(xns, self$splitOneColumn, ind = ind)
     b.list = lapply(s.list, function(x) {
-      if (is.na(x)) return(NA)
+      if (any(is.na(x))) return(NA)
       x$gini
     })
-    id = which.max(b.list)
+    id = which.min(b.list)
     return(list(l = s.list[[id]]$l, r = s.list[[id]]$r, fun = s.list[[id]]$fun, env = s.list[[id]]$env))
   },
 
@@ -159,21 +164,25 @@ Mtree = R6Class("Mtree",
   )
 )
 
-library(mlr)
-trainset = subsetTask(pid.task, subset = 1:760)
-testset = subsetTask(pid.task, subset = 761:768)
-res = getTaskData(trainset, target.extra = TRUE)
-mt = Mtree$new(res$data, res$target)
-mt$train()
-test = getTaskData(testset, target.extra = TRUE)
-test = test$data
-mt$pred.scalar(test[1, ])
-mpred = mt$pred(test)
-lrn = makeLearner("classif.rpart")
-mod = train(lrn, trainset)
-hpred = predict(mod, testset)
-hpred$data
-
+# Modified tree which allows for sampling features at each split
+RMtree = R6Class("RMtree",
+  inherit = Mtree,
+  public = list(
+  msplit = function(ind) {
+    if (length(ind) < self$minInst) return(NULL)
+    xns = names(self$X)
+    xns = sample.int(n = length(xns), size = self$mtry)   # key difference here
+    # at each split, only random sampled columns are used, this is different from a normal tree
+    s.list = lapply(xns, self$splitOneColumn, ind = ind)
+    b.list = lapply(s.list, function(x) {
+      if (any(is.na(x))) return(NA)
+      x$gini
+    })
+    id = which.min(b.list)
+    return(list(l = s.list[[id]]$l, r = s.list[[id]]$r, fun = s.list[[id]]$fun, env = s.list[[id]]$env))
+  }
+    )
+  )
 mRF = R6Class("mRF",
   public = list(
     ntree = NULL,
@@ -203,55 +212,57 @@ mRF = R6Class("mRF",
       return(mod)
   },
 
-
-
-    sample = function() {
-      sample.int(n = self$ncols, size = self$mtry)
-    },
-
     train = function() {
       self$model = lapply(1:self$ntree, function(i) {
-        cols = self$sample()
-        mt = Mtree$new(self$X[, cols], self$y)
+        ind = sample.int(nrow(self$X), replace = TRUE)  # generate a bootstrap sampling of rows for eah tree
+        X = self$X[ind, ]
+        y = self$y[ind]
+        mt = Mtree$new(X, y)
         mt$train()
-        list(model = mt, cols = cols)
+        list(model = mt)
     })
     },
 
     pred.scalar = function(x) {
       res.list = lapply(self$model, function(m) {
-        m$model$pred.scalar(x[m$cols])
+        m$model$pred.scalar(x)
     })
-      self$mode(unlist(res.list))   # FIXME: factor
+      self$mode(unlist(res.list))   # FIXME: only works with factor now
     },
 
     pred = function(X) {
-      apply(X, 1L, self$pred.scalar) 
+      apply(X, 1L, self$pred.scalar)
     }
 
     )
   )
 
-# mtry is the the number of features subsampled
-lrn = makeLearner("classif.randomForest", ntree = 10, mtry = floor(sqrt(8)))
-trainset = subsetTask(pid.task, subset = 1:760)
-# I made the first 760 instances to be training and the rest to be test
-testset = subsetTask(pid.task, subset = 761:768)
-mod = train(lrn, trainset)
-pred = predict(mod, testset)
-pred$data
-data = getTaskData(pid.task)  # you can use this dataset for proofing your code
-
-
-
+## mlr data loading
 library(mlr)
 trainset = subsetTask(pid.task, subset = 1:760)
 testset = subsetTask(pid.task, subset = 761:768)
-res = getTaskData(trainset, target.extra = TRUE)
-mt = mRF$new(res$data, res$target, ntree = 10, mtry = 3)
+train = getTaskData(trainset, target.extra = TRUE)
 test = getTaskData(testset, target.extra = TRUE)
 test = test$data
+
+
+# Tree
+mt = Mtree$new(train$data, train$target)
 mt$train()
-mt$pred.scalar(test[1, ])
-mpred = mt$pred(test)
-mpred
+mt$pred(test)
+
+## Random Forest
+mrf = mRF$new(train$data, train$target, ntree = 10, mtry = 3)
+mrf$train()
+mrf$pred(test)
+
+## mlr tree and Random Forest
+
+lrn = makeLearner("classif.rpart")
+mod = train(lrn, trainset)
+pred = predict(mod, testset)
+pred$data
+lrn = makeLearner("classif.randomForest", ntree = 10, mtry = floor(sqrt(8)))
+mod = train(lrn, trainset)
+pred = predict(mod, testset)
+pred$data
