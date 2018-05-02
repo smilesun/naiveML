@@ -103,6 +103,11 @@ Mtree = R6Class("Mtree",
       if (any(is.na(x))) return(NA)
       x$gini
     })
+    cur.gini = self$gini(ind)
+    mini.gini = min(unlist(b.list))
+    decr.gini = (cur.gini - mini.gini) / cur.gini
+    if( is.na(decr.gini)) return(NA)
+    if (decr.gini  < 0.01) return(NA) # if the decrease is less than 0.01, do not split
     id = which.min(b.list)
     return(list(l = s.list[[id]]$l, r = s.list[[id]]$r, fun = s.list[[id]]$fun, env = s.list[[id]]$env))
   },
@@ -118,7 +123,7 @@ Mtree = R6Class("Mtree",
       ele = self$queue$dequeue()
       ind = ele$ind
       res = self$msplit(ind)
-      if (is.null(res)) {
+      if (is.null(res) || is.na(res)) {
         next
       }
       ele = list(lind = res$l, rind = res$r, fun = res$fun, lpos = self$queue$front, rpos = self$queue$front + 1L, env = res$env)
@@ -178,6 +183,11 @@ RMtree = R6Class("RMtree",
       if (any(is.na(x))) return(NA)
       x$gini
     })
+    cur.gini = self$gini(ind)
+    mini.gini = min(b.list)
+    decr.gini = (cur.gini - mini.gini) / cur.gini
+    if( is.na(decr.gini)) return(NA)
+    if (decr.gini < 0.01) return(NA) # if the decrease is less than 0.01, do not split
     id = which.min(b.list)
     return(list(l = s.list[[id]]$l, r = s.list[[id]]$r, fun = s.list[[id]]$fun, env = s.list[[id]]$env))
   }
